@@ -1,5 +1,23 @@
 package de.seuhd.campuscoffee.domain.implementation;
 
+import java.util.List;
+import java.util.Objects;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import static org.mockito.ArgumentMatchers.any;
+import org.mockito.Mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+import org.mockito.junit.jupiter.MockitoExtension;
+
 import de.seuhd.campuscoffee.domain.configuration.ApprovalConfiguration;
 import de.seuhd.campuscoffee.domain.exceptions.NotFoundException;
 import de.seuhd.campuscoffee.domain.exceptions.ValidationException;
@@ -10,22 +28,7 @@ import de.seuhd.campuscoffee.domain.ports.data.PosDataService;
 import de.seuhd.campuscoffee.domain.ports.data.ReviewDataService;
 import de.seuhd.campuscoffee.domain.ports.data.UserDataService;
 import de.seuhd.campuscoffee.domain.tests.TestFixtures;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-
-import java.util.List;
-import java.util.Objects;
-
 import static de.seuhd.campuscoffee.domain.tests.TestFixtures.getApprovalConfiguration;
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.Mockito.*;
 
 /**
  * Unit and integration tests for the operations related to reviews.
@@ -173,4 +176,72 @@ public class ReviewServiceTest {
         // then
         assertTrue(updatedReview.approved());
     }
+    @Test
+    void upsertSuccessfulWhenFirstReviewForPosAndAuthor() {
+        // given
+        Review review = TestFixtures.getReviewFixtures().getFirst();
+        Pos pos = review.pos();
+        User author = review.author();
+        assertNotNull(pos.getId());
+        assertNotNull(author.getId());
+
+        when(posDataService.getById(pos.getId())).thenReturn(pos);
+        // no existing reviews for this pos+author
+        when(reviewDataService.filter(pos, author)).thenReturn(List.of());
+        when(reviewDataService.upsert(any(Review.class)))
+            .thenAnswer(invocation -> invocation.getArgument(0));
+
+        // when
+        Review saved = reviewService.upsert(review);
+
+        // then
+        verify(posDataService).getById(pos.getId());
+        verify(reviewDataService).filter(pos, author);
+        verify(reviewDataService).upsert(review);
+
+        assertThat(saved).isSameAs(review);
+    }
+    @Test
+    void filterReturnsUnapprovedReviews() {
+        // given
+        Pos pos = TestFixtures.getPosFixtures().getFirst();
+        assertNotNull(pos.getId());
+
+        List<Review> unapproved = TestFixtures.getReviewFixtures().stream()
+                .map(r -> r.toBuilder()
+                        .pos(pos)
+                        .approved(false)
+                        .build())
+                .toList();
+
+        when(posDataService.getById(pos.getId())).thenReturn(pos);
+        when(reviewDataService.filter(pos, false)).thenReturn(unapproved);
+
+        // when
+        List<Review> result = reviewService.filter(pos.getId(), false);
+
+        // then
+        verify(posDataService).getById(pos.getId());
+        verify(reviewDataService).filter(pos, false);
+        assertThat(result).hasSize(unapproved.size());
+    }
+    @Test
+    void approvalFailsIfUserDoesNotExist() {
+        // given
+        Review review = TestFixtures.getReviewFixtures().getFirst();
+        assertNotNull(review.getId());
+        Long unknownUserId = 999L;
+
+        when(userDataService.getById(unknownUserId))
+                .thenThrow(new de.seuhd.campuscoffee.domain.exceptions.NotFoundException(User.class, unknownUserId));
+
+        // when / then
+        assertThrows(de.seuhd.campuscoffee.domain.exceptions.NotFoundException.class,
+                () -> reviewService.approve(review, unknownUserId));
+
+        verify(userDataService).getById(unknownUserId);
+        verifyNoInteractions(reviewDataService);
+    }
+
+
 }
